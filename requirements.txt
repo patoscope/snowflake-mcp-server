@@ -1,0 +1,3 @@
+mcp
+snowflake-connector-python
+toml
