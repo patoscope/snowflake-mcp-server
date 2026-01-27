@@ -76,7 +76,9 @@ def get_snowflake_connection(connection_name: str):
         database=config.get("database"),
         schema=config.get("schema"),
         role=config.get("role"),
-        authenticator=config.get("authenticator")
+        authenticator=config.get("authenticator"),
+        client_session_keep_alive=True,
+        client_store_temporary_credential=True
     )
     
     # Store in cache
@@ -101,6 +103,22 @@ def execute_query(query: str, connection_name: str) -> str:
         query: The SQL query to execute.
         connection_name: The name of the connection profile to use (e.g. from list_connections).
     """
+    # SAFETY CHECK: Prevent execution in PROD
+    try:
+        # Check connection name
+        if "PROD" in connection_name.upper():
+            return f"🚫 AUTHORIZATION DENIED: Executing queries in PROD environment '{connection_name}' is not allowed via MCP."
+
+        # Check warehouse in configuration
+        # We need to load config to check the warehouse
+        config = get_connection_config(connection_name)
+        warehouse = config.get("warehouse", "").upper()
+        if "PROD" in warehouse:
+             return f"🚫 AUTHORIZATION DENIED: Executing queries on PROD warehouse '{warehouse}' is not allowed via MCP."
+             
+    except Exception as e:
+        return f"Configuration Error during safety check: {str(e)}"
+
     try:
         ctx = get_snowflake_connection(connection_name)
         
