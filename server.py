@@ -4,6 +4,7 @@ import toml
 import os
 import json
 import logging
+import csv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,13 +96,15 @@ def list_connections() -> str:
     return json.dumps(list(config.keys()))
 
 @mcp.tool()
-def execute_query(query: str, connection_name: str) -> str:
+def execute_query(query: str, connection_name: str, export_to_csv: str = None) -> str:
     """
     Execute a SQL query against Snowflake.
     
     Args:
         query: The SQL query to execute.
         connection_name: The name of the connection profile to use (e.g. from list_connections).
+        export_to_csv: Optional absolute path to save the result as a CSV file instead of returning JSON.
+                       Useful for large datasets.
     """
     # SAFETY CHECK: Prevent execution in PROD
     try:
@@ -115,6 +118,11 @@ def execute_query(query: str, connection_name: str) -> str:
         warehouse = config.get("warehouse", "").upper()
         if "PROD" in warehouse:
              return f"🚫 AUTHORIZATION DENIED: Executing queries on PROD warehouse '{warehouse}' is not allowed via MCP."
+
+        # SAFETY CHECK: Allow only SELECT-like queries
+        # We allow SELECT, WITH (Common Table Expressions), SHOW (Metadata), DESC/DESCRIBE, EXPLAIN, LIST (Stages)
+        if not query.strip().upper().startswith(("SELECT", "WITH", "SHOW", "DESC", "EXPLAIN", "LIST")):
+            return "🚫 AUTHORIZATION DENIED: Only SELECT/Read-Only statements are allowed."
              
     except Exception as e:
         return f"Configuration Error during safety check: {str(e)}"
@@ -125,6 +133,44 @@ def execute_query(query: str, connection_name: str) -> str:
         cs = ctx.cursor()
         try:
             cs.execute(query)
+            
+            # Handle CSV Export
+            if export_to_csv:
+                try:
+                    # Check if result has rows
+                    if not cs.description:
+                        return json.dumps({"status": "success", "message": "Query executed but returned no rows (DDL/DML?). No CSV created."})
+                    
+                    columns = [col[0] for col in cs.description]
+                    
+                    # Ensure directory exists if path is absolute
+                    output_path = os.path.abspath(export_to_csv)
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    
+                    row_count = 0
+                    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(columns)  # Header
+                        
+                        # Fetch in chunks to save memory
+                        while True:
+                            rows = cs.fetchmany(1000)
+                            if not rows:
+                                break
+                            writer.writerows(rows)
+                            row_count += len(rows)
+                            
+                    return json.dumps({
+                        "status": "success", 
+                        "message": f"Query result exported to CSV.",
+                        "file_path": output_path,
+                        "rows_count": row_count
+                    })
+                    
+                except Exception as csv_err:
+                    return f"Error exporting to CSV: {str(csv_err)}"
+            
+            # Standard JSON Return
             result = cs.fetchall()
             
             if cs.description:
