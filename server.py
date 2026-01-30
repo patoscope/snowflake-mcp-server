@@ -121,7 +121,26 @@ def execute_query(query: str, connection_name: str, export_to_csv: str = None) -
 
         # SAFETY CHECK: Allow only SELECT-like queries
         # We allow SELECT, WITH (Common Table Expressions), SHOW (Metadata), DESC/DESCRIBE, EXPLAIN, LIST (Stages)
-        if not query.strip().upper().startswith(("SELECT", "WITH", "SHOW", "DESC", "EXPLAIN", "LIST")):
+        # Strip whitespace and remove SQL comments before checking
+        query_check = query.strip()
+        # Remove leading SQL comments (-- style)
+        while query_check.upper().startswith(('--', '/*')):
+            if query_check.startswith('--'):
+                # Remove single-line comment
+                next_line = query_check.find('\n')
+                if next_line > 0:
+                    query_check = query_check[next_line+1:].strip()
+                else:
+                    return "🚫 AUTHORIZATION DENIED: Query contains only comments."
+            elif query_check.startswith('/*'):
+                # Remove multi-line comment
+                end_comment = query_check.find('*/')
+                if end_comment > 0:
+                    query_check = query_check[end_comment+2:].strip()
+                else:
+                    return "🚫 AUTHORIZATION DENIED: Malformed multi-line comment."
+        
+        if not query_check.upper().startswith(("SELECT", "WITH", "SHOW", "DESC", "EXPLAIN", "LIST")):
             return "🚫 AUTHORIZATION DENIED: Only SELECT/Read-Only statements are allowed."
              
     except Exception as e:
